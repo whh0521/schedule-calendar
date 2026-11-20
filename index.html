@@ -62,6 +62,14 @@ button:focus-visible, input:focus-visible, .day:focus-visible { outline: 2px sol
 .btn { border: 0; border-radius: 10px; padding: 11px 18px; background: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .btn:disabled { opacity: .45; cursor: default; }
 .btn-ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+.group-chip { display: inline-block; font-size: .8rem; font-weight: 600; letter-spacing: .04em; color: var(--accent); background: var(--accent-soft); padding: 2px 10px; border-radius: 999px; justify-self: start; }
+.maker { border-top: 1px solid var(--line); padding-top: 14px; font-size: .9rem; }
+.maker summary { cursor: pointer; color: var(--muted); }
+.maker .fields { display: grid; gap: 8px; margin-top: 12px; }
+.maker label { display: grid; gap: 4px; font-size: .82rem; color: var(--muted); }
+.maker input { flex: none; width: 100%; }
+.maker .out { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.maker code { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: .78rem; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
 .notice { font-size: .88rem; padding: 10px 12px; border-radius: 10px; background: var(--mine-soft); color: var(--ink); }
 
 /* Calendar step */
@@ -128,7 +136,8 @@ button:focus-visible, input:focus-visible, .day:focus-visible { outline: 2px sol
   <!-- Step 1: name -->
   <section class="intro" id="step-name">
     <div style="display:grid;gap:6px">
-      <h1>조원 일정 맞추기</h1>
+      <span class="group-chip" id="group-chip"></span>
+      <h1 id="page-title">조원 일정 맞추기</h1>
       <p class="muted">이름을 적고 들어가서 가능한 날짜를 모두 눌러 주세요. 같은 이름으로 다시 들어오면 내가 고른 날짜를 고칠 수 있어요.</p>
     </div>
     <form id="name-form" autocomplete="off">
@@ -136,6 +145,21 @@ button:focus-visible, input:focus-visible, .day:focus-visible { outline: 2px sol
       <button class="btn" id="name-go" type="submit">달력으로 이동</button>
     </form>
     <p class="notice" id="db-notice" hidden></p>
+    <details class="maker">
+      <summary>다른 그룹용 링크 만들기</summary>
+      <div class="fields">
+        <label for="mk-group">그룹 이름
+          <input id="mk-group" type="text" maxlength="30" placeholder="예: 3조, 동아리">
+        </label>
+        <label for="mk-month">달력에 보여 줄 달
+          <input id="mk-month" type="month">
+        </label>
+        <div class="out">
+          <code id="mk-link">그룹 이름을 적으면 링크가 만들어져요</code>
+          <button class="btn btn-ghost" id="mk-copy" type="button" disabled>복사</button>
+        </div>
+      </div>
+    </details>
   </section>
 
   <!-- Step 2: calendar -->
@@ -183,7 +207,7 @@ button:focus-visible, input:focus-visible, .day:focus-visible { outline: 2px sol
   const todayKey = keyOf(today.getFullYear(), today.getMonth(), today.getDate());
 
   // ▼▼▼ 구글 Apps Script 웹 앱 URL을 여기에 붙여 넣으세요 (README 참고) ▼▼▼
-  const SCRIPT_URL = "https://script.google.com/macros/s/AKfycby5Oe_OMcbmya9zxZhEo5VvoZzFukGLb3vzPsWefijOBKHNb8hckQCW5JKEKBFVtImk/exec";
+  const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyUNwXDKgd0snCOGq-dtAXbkxWwzayFCxLJ4-aBxHPdoW6guhENOx3L6DQyLdklYL67/exec";
   // ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
   const POLL_MS = 15000;     // 다른 사람 체크를 15초마다 새로 불러옴
   let ready = false;         // 시트에서 처음 불러오기에 성공했는지
@@ -192,7 +216,15 @@ button:focus-visible, input:focus-visible, .day:focus-visible { outline: 2px sol
   let me = "";               // current name
   let mine = new Set();      // my working selection
   let savedMine = new Set(); // my saved selection
-  const view = { y: 2026, m: 11 }; // 2026년 12월 고정
+  // ---------- 링크로 그룹과 달 정하기: ?g=3조&m=2026-12 ----------
+  const params = new URLSearchParams(location.search);
+  const GROUP = (params.get("g") || "").trim().replace(/\s+/g, " ").slice(0, 30) || "기본";
+  const view = (() => {
+    const mm = /^(\d{4})-(\d{1,2})$/.exec(params.get("m") || "");
+    if (mm && +mm[2] >= 1 && +mm[2] <= 12) return { y: +mm[1], m: +mm[2] - 1 };
+    return { y: today.getFullYear(), m: today.getMonth() };
+  })();
+  const NAME_KEY = "sched-name:" + GROUP;
   let saving = false;
 
   const store = {
@@ -205,7 +237,7 @@ button:focus-visible, input:focus-visible, .day:focus-visible { outline: 2px sol
   // ---------- Step switching ----------
   function showName() {
     $("step-cal").hidden = true; $("step-name").hidden = false;
-    $("name-input").value = me || store.get("sched-name") || "";
+    $("name-input").value = me || store.get(NAME_KEY) || "";
     $("name-input").focus();
   }
   function showCal() {
@@ -224,7 +256,7 @@ button:focus-visible, input:focus-visible, .day:focus-visible { outline: 2px sol
     e.preventDefault();
     const n = $("name-input").value.trim().replace(/\s+/g, " ");
     if (!n) { $("name-input").focus(); return; }
-    me = n; store.set("sched-name", n);
+    me = n; store.set(NAME_KEY, n);
     showCal();
   });
   $("change-name").addEventListener("click", showName);
@@ -326,7 +358,7 @@ button:focus-visible, input:focus-visible, .day:focus-visible { outline: 2px sol
       const res = await fetch(SCRIPT_URL, {
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify({ name: me, dates }),
+        body: JSON.stringify({ group: GROUP, name: me, dates }),
       });
       const json = await res.json();
       if (!json.ok) throw new Error(json.error || "save failed");
@@ -355,7 +387,7 @@ button:focus-visible, input:focus-visible, .day:focus-visible { outline: 2px sol
   async function load() {
     if (saving || document.hidden) return;
     try {
-      const res = await fetch(SCRIPT_URL + "?t=" + Date.now());
+      const res = await fetch(SCRIPT_URL + "?g=" + encodeURIComponent(GROUP) + "&t=" + Date.now());
       const json = await res.json();
       if (!json.ok) throw new Error(json.error || "load failed");
       applyVotes(json.votes, false);
@@ -377,6 +409,32 @@ button:focus-visible, input:focus-visible, .day:focus-visible { outline: 2px sol
     document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
   }
   function showNotice(t) { const n = $("db-notice"); n.textContent = t; n.hidden = false; const s = $("status"); if (s) s.textContent = t; }
+
+  // ---------- 그룹 표시 + 새 링크 만들기 ----------
+  const monthLabel = `${view.y}년 ${view.m + 1}월`;
+  $("group-chip").textContent = GROUP === "기본" ? monthLabel : `${GROUP} · ${monthLabel}`;
+  if (GROUP !== "기본") { $("page-title").textContent = `${GROUP} 일정 맞추기`; document.title = `${GROUP} 일정 맞추기`; }
+
+  $("mk-month").value = `${view.y}-${pad(view.m + 1)}`;
+  let madeLink = "";
+  function makeLink() {
+    const g = $("mk-group").value.trim().replace(/\s+/g, " ");
+    const m = $("mk-month").value;
+    if (!g) { madeLink = ""; $("mk-link").textContent = "그룹 이름을 적으면 링크가 만들어져요"; $("mk-copy").disabled = true; return; }
+    const u = new URL(location.href.split("?")[0].split("#")[0]);
+    u.searchParams.set("g", g);
+    if (m) u.searchParams.set("m", m);
+    madeLink = u.toString();
+    $("mk-link").textContent = madeLink;
+    $("mk-copy").disabled = false; $("mk-copy").textContent = "복사";
+  }
+  $("mk-group").addEventListener("input", makeLink);
+  $("mk-month").addEventListener("input", makeLink);
+  $("mk-copy").addEventListener("click", async () => {
+    if (!madeLink) return;
+    try { await navigator.clipboard.writeText(madeLink); $("mk-copy").textContent = "복사됨"; }
+    catch { const r = document.createRange(); r.selectNodeContents($("mk-link")); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); }
+  });
 
   showName();
   connect();
