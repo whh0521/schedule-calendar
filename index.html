@@ -78,7 +78,12 @@ button:focus-visible, input:focus-visible, .day:focus-visible { outline: 2px sol
 .who .tag { background: var(--mine-soft); border: 1px solid var(--mine); padding: 3px 10px; border-radius: 999px; font-weight: 600; }
 .linkbtn { background: none; border: 0; padding: 0; color: var(--muted); text-decoration: underline; font-size: .88rem; }
 .cal { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px; display: grid; gap: 10px; }
-.cal-head { display: flex; align-items: center; justify-content: center; gap: 8px; padding-block: 4px; }
+.cal-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.cal-head.single { justify-content: center; padding-block: 4px; }
+.cal-head.single .nav { display: none; }
+.cal-head .mlabel { display: grid; justify-items: center; gap: 2px; }
+.cal-head .pos { font-size: .78rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.nav:disabled { opacity: .3; cursor: default; }
 .cal-head h2 { font-size: 1.2rem; font-variant-numeric: tabular-nums; }
 .nav { width: 38px; height: 38px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font-size: 1.1rem; }
 .grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
@@ -166,8 +171,11 @@ button:focus-visible, input:focus-visible, .day:focus-visible { outline: 2px sol
         <label for="mk-group">그룹 이름
           <input id="mk-group" type="text" maxlength="30" placeholder="예: 3조, 동아리">
         </label>
-        <label for="mk-month">달력에 보여 줄 달
+        <label for="mk-month">시작 달
           <input id="mk-month" type="month">
+        </label>
+        <label for="mk-to">끝 달 (한 달만 쓸 거면 비워 두세요)
+          <input id="mk-to" type="month">
         </label>
         <div class="out">
           <code id="mk-link">그룹 이름을 적으면 링크가 만들어져요</code>
@@ -189,8 +197,10 @@ button:focus-visible, input:focus-visible, .day:focus-visible { outline: 2px sol
     </div>
 
     <div class="cal">
-      <div class="cal-head">
-        <h2 id="month-label"></h2>
+      <div class="cal-head" id="cal-head">
+        <button class="nav" id="prev" type="button" aria-label="이전 달">‹</button>
+        <div class="mlabel"><h2 id="month-label"></h2><span class="pos" id="month-pos"></span></div>
+        <button class="nav" id="next" type="button" aria-label="다음 달">›</button>
       </div>
       <div class="grid" id="grid"></div>
     </div>
@@ -234,11 +244,26 @@ button:focus-visible, input:focus-visible, .day:focus-visible { outline: 2px sol
   // ---------- 링크로 그룹과 달 정하기: ?g=3조&m=2026-12 ----------
   const params = new URLSearchParams(location.search);
   const GROUP = (params.get("g") || "").trim().replace(/\s+/g, " ").slice(0, 30) || "기본";
-  const view = (() => {
-    const mm = /^(\d{4})-(\d{1,2})$/.exec(params.get("m") || "");
-    if (mm && +mm[2] >= 1 && +mm[2] <= 12) return { y: +mm[1], m: +mm[2] - 1 };
-    return { y: today.getFullYear(), m: today.getMonth() };
+  // ?m=2026-12 → 한 달, ?m=2026-12&to=2027-02 → 12월~2월 (최대 12개월)
+  const parseYm = (v) => {
+    const mm = /^(\d{4})-(\d{1,2})$/.exec(v || "");
+    return mm && +mm[2] >= 1 && +mm[2] <= 12 ? { y: +mm[1], m: +mm[2] - 1 } : null;
+  };
+  const ymIndex = (o) => o.y * 12 + o.m;
+  const fromIndex = (i) => ({ y: Math.floor(i / 12), m: i % 12 });
+  const START = parseYm(params.get("m")) || { y: today.getFullYear(), m: today.getMonth() };
+  const END = (() => {
+    const e = parseYm(params.get("to"));
+    if (!e || ymIndex(e) < ymIndex(START)) return START;
+    return fromIndex(Math.min(ymIndex(e), ymIndex(START) + 11));
   })();
+  const MONTHS = ymIndex(END) - ymIndex(START) + 1;
+  const RANGE_FROM = keyOf(START.y, START.m, 1);
+  const RANGE_TO = keyOf(END.y, END.m, 31);
+  const inRange = (k) => k >= RANGE_FROM && k <= RANGE_TO;
+  // 처음엔 이번 달이 기간 안에 있으면 이번 달, 아니면 시작 달
+  const todayIdx = today.getFullYear() * 12 + today.getMonth();
+  const view = fromIndex(todayIdx >= ymIndex(START) && todayIdx <= ymIndex(END) ? todayIdx : ymIndex(START));
   const NAME_KEY = "sched-name:" + GROUP;
   let saving = false;
 
@@ -291,10 +316,15 @@ button:focus-visible, input:focus-visible, .day:focus-visible { outline: 2px sol
   function render() {
     if ($("step-cal").hidden) return;
     const map = countsByDate();
-    let max = 0; for (const l of map.values()) max = Math.max(max, l.length);
+    let max = 0; for (const [k, l] of map) if (inRange(k)) max = Math.max(max, l.length);
 
     const { y, m } = view;
     $("month-label").textContent = `${y}년 ${m + 1}월`;
+    const pos = ymIndex(view) - ymIndex(START);
+    $("cal-head").classList.toggle("single", MONTHS === 1);
+    $("month-pos").textContent = MONTHS > 1 ? `${pos + 1} / ${MONTHS}` : "";
+    $("prev").disabled = pos <= 0;
+    $("next").disabled = pos >= MONTHS - 1;
     const grid = $("grid");
     grid.textContent = "";
     DOW.forEach((d, i) => {
@@ -356,7 +386,7 @@ button:focus-visible, input:focus-visible, .day:focus-visible { outline: 2px sol
     $("reset").disabled = !dirty || saving;
 
     // Ranking
-    const ranked = [...map.entries()].filter(([, l]) => l.length).sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0])).slice(0, 10);
+    const ranked = [...map.entries()].filter(([k, l]) => l.length && inRange(k)).sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0])).slice(0, 10);
     const ol = $("rank"); ol.textContent = "";
     $("rank-empty").hidden = ranked.length > 0;
     for (const [k, l] of ranked) {
@@ -433,11 +463,16 @@ button:focus-visible, input:focus-visible, .day:focus-visible { outline: 2px sol
   function showNotice(t) { const n = $("db-notice"); n.textContent = t; n.hidden = false; const s = $("status"); if (s) s.textContent = t; }
 
   // ---------- 그룹 표시 + 새 링크 만들기 ----------
-  const monthLabel = `${view.y}년 ${view.m + 1}월`;
+  $("prev").addEventListener("click", () => { if (ymIndex(view) > ymIndex(START)) { Object.assign(view, fromIndex(ymIndex(view) - 1)); render(); } });
+  $("next").addEventListener("click", () => { if (ymIndex(view) < ymIndex(END)) { Object.assign(view, fromIndex(ymIndex(view) + 1)); render(); } });
+
+  const monthLabel = MONTHS === 1 ? `${START.y}년 ${START.m + 1}월`
+    : START.y === END.y ? `${START.y}년 ${START.m + 1}월~${END.m + 1}월` : `${START.y}년 ${START.m + 1}월~${END.y}년 ${END.m + 1}월`;
   $("group-chip").textContent = GROUP === "기본" ? monthLabel : `${GROUP} · ${monthLabel}`;
   if (GROUP !== "기본") { $("page-title").textContent = `${GROUP} 일정 맞추기`; document.title = `${GROUP} 일정 맞추기`; }
 
-  $("mk-month").value = `${view.y}-${pad(view.m + 1)}`;
+  $("mk-month").value = `${START.y}-${pad(START.m + 1)}`;
+  if (MONTHS > 1) $("mk-to").value = `${END.y}-${pad(END.m + 1)}`;
   let madeLink = "";
   function makeLink() {
     const g = $("mk-group").value.trim().replace(/\s+/g, " ");
@@ -445,13 +480,16 @@ button:focus-visible, input:focus-visible, .day:focus-visible { outline: 2px sol
     if (!g) { madeLink = ""; $("mk-link").textContent = "그룹 이름을 적으면 링크가 만들어져요"; $("mk-copy").disabled = true; return; }
     const u = new URL(location.href.split("?")[0].split("#")[0]);
     u.searchParams.set("g", g);
+    const to = $("mk-to").value;
     if (m) u.searchParams.set("m", m);
+    if (m && to && to > m) u.searchParams.set("to", to);
     madeLink = u.toString();
     $("mk-link").textContent = madeLink;
     $("mk-copy").disabled = false; $("mk-copy").textContent = "복사";
   }
   $("mk-group").addEventListener("input", makeLink);
   $("mk-month").addEventListener("input", makeLink);
+  $("mk-to").addEventListener("input", makeLink);
   $("mk-copy").addEventListener("click", async () => {
     if (!madeLink) return;
     try { await navigator.clipboard.writeText(madeLink); $("mk-copy").textContent = "복사됨"; }
